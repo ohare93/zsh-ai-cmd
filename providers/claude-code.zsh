@@ -1,50 +1,61 @@
-#!/usr/bin/env zsh
-# claude-code.zsh - Provider using claude -p (Claude Code pipe mode)
-# Uses Claude Max subscription instead of API key
+# providers/claude-code.zsh - Claude Code CLI provider (pipe mode)
+# Uses Claude subscription (Max/Pro/Enterprise) instead of an API key.
+# Requires Claude Code CLI: npm install -g @anthropic-ai/claude-code
 
-typeset -g ZSH_AI_CMD_CLAUDE_CODE_MODEL=${ZSH_AI_CMD_CLAUDE_CODE_MODEL:-'haiku'}
+# Empty default: uses the CLI's own default model. Override to pin a specific model.
+typeset -g ZSH_AI_CMD_CLAUDE_CODE_MODEL=${ZSH_AI_CMD_CLAUDE_CODE_MODEL:-''}
 
 _zsh_ai_cmd_claude_code_call() {
   local input=$1
   local prompt=$2
 
-  local json_schema='{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}'
+  # Text output mode is ~1.5x faster than JSON structured output because
+  # --output-format json + --json-schema adds overhead to CLI startup.
+  # The system prompt already enforces single-command output, matching
+  # the approach used by the copilot provider.
+  local -a cmd=(command claude -p
+    --no-session-persistence
+    --effort low
+    --disable-slash-commands
+    --strict-mcp-config
+    --setting-sources ""
+    --no-chrome
+    --tools ""
+    --system-prompt "$prompt"
+  )
+  [[ -n $ZSH_AI_CMD_CLAUDE_CODE_MODEL ]] && cmd+=(--model "$ZSH_AI_CMD_CLAUDE_CODE_MODEL")
 
   local response
-  response=$(command claude -p \
-    --no-session-persistence \
-    --effort low \
-    --disable-slash-commands \
-    --strict-mcp-config \
-    --setting-sources "" \
-    --model "$ZSH_AI_CMD_CLAUDE_CODE_MODEL" \
-    --tools "" \
-    --output-format json \
-    --json-schema "$json_schema" \
-    --system-prompt "$prompt" \
-    "$input" 2>/dev/null)
+  response=$("${cmd[@]}" "$input" 2>/dev/null)
 
-  [[ $ZSH_AI_CMD_DEBUG == true ]] && {
-    print -- "=== $(date) [claude-code] ===" >> $ZSH_AI_CMD_LOG
-    print -- "Input: $input" >> $ZSH_AI_CMD_LOG
-    print -- "Response: $response" >> $ZSH_AI_CMD_LOG
-  }
-
-  # Check for error
-  local is_error=$(print -r -- "$response" | command jq -r '.is_error // false' 2>/dev/null)
-  if [[ $is_error == "true" ]]; then
-    local error_msg=$(print -r -- "$response" | command jq -r '.result // "Unknown error"' 2>/dev/null)
-    print -u2 "zsh-ai-cmd [claude-code]: $error_msg"
-    return 1
+  # Debug log
+  if [[ $ZSH_AI_CMD_DEBUG == true ]]; then
+    {
+      print -- "=== $(date '+%Y-%m-%d %H:%M:%S') [claude-code] ==="
+      print -- "--- REQUEST ---"
+      print -- "Model: ${ZSH_AI_CMD_CLAUDE_CODE_MODEL:-default}"
+      print -- "Input: $input"
+      print -- "--- RESPONSE ---"
+      print -- "$response"
+      print ""
+    } >>$ZSH_AI_CMD_LOG
   fi
 
-  # Extract command from structured output
-  print -r -- "$response" | command jq -r '.structured_output.command // empty' 2>/dev/null
+  [[ -z $response ]] && return 1
+
+  # Text mode returns the command directly (no JSON to parse).
+  # Error messages from the CLI are suppressed by 2>/dev/null above;
+  # an empty response is the only failure signal.
+  print -r -- "$response"
 }
 
 _zsh_ai_cmd_claude_code_key_error() {
+  print -u2 ""
   print -u2 "zsh-ai-cmd: Claude Code not found or not authenticated."
   print -u2 ""
-  print -u2 "Install Claude Code: npm install -g @anthropic-ai/claude-code"
-  print -u2 "Then authenticate:   claude login"
+  print -u2 "Install Claude Code:"
+  print -u2 "  npm install -g @anthropic-ai/claude-code"
+  print -u2 ""
+  print -u2 "Then authenticate:"
+  print -u2 "  claude login"
 }
